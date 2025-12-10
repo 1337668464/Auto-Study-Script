@@ -1,147 +1,178 @@
 // ==UserScript==
-// @name         广东省教师继续教育刷课助手-V6.1(修正不播版)
+// @name         广东省教师继续教育刷课助手-V8.0(Worker内核防冻结版)
 // @namespace    http://tampermonkey.net/
-// @version      6.1
-// @description  强制视频播放、并行处理答题、防误判、双域名适配
+// @version      8.0
+// @description  Web Worker内核驱动、全域答题、双域名适配、彻底解决后台节流问题
 // @author       You & AI
 // @match        https://jsglpt.gdedu.gov.cn/*
 // @match        https://jsxx.gdedu.gov.cn/*
-// @grant        none
+// @grant        unsafeWindow
 // ==/UserScript==
 
 (function() {
     'use strict';
 
+    // === 核心配置 ===
     const CONFIG = {
-        scanInterval: 3000,
-        answerDelay: 1500,
-        reloadTimeout: 120, // 2分钟不动才刷新
+        scanInterval: 3000,     // 扫描检测频率 (毫秒)
+        answerDelay: 1500,      // 发现题目后的思考时间
+        reloadThreshold: 120,   // 卡顿容忍时长 (秒)
     };
 
     // ==========================================
-    // MODULE: 状态面板 + 强制启动按钮
+    // MODULE 1: UI 面板 & 启动控制器
     // ==========================================
-    const infoBox = document.createElement('div');
-    infoBox.id = 'tm-status-panel';
-    infoBox.style.cssText = `
-        position: fixed;
-        top: 10px;
-        left: 10px;
-        z-index: 999999;
-        background: rgba(0, 0, 0, 0.85);
-        color: #fff;
-        padding: 12px;
-        border-radius: 8px;
-        font-size: 13px;
-        font-family: sans-serif;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.5);
-        border: 1px solid #555;
-        min-width: 180px;
+    const panel = document.createElement('div');
+    panel.style.cssText = `
+        position: fixed; top: 10px; left: 10px; z-index: 999999;
+        background: rgba(20, 20, 20, 0.95); color: #fff;
+        padding: 15px; border-radius: 8px; font-size: 13px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.6); border: 1px solid #444;
+        width: 200px; font-family: sans-serif;
     `;
-    // 添加一个手动启动按钮，防止浏览器阻拦自动播放
-    infoBox.innerHTML = `
-        <div style="margin-bottom:5px; color:#00ff00; font-weight:bold;">🤖 刷课助手 V6.1</div>
-        <div id="tm-msg">⏳ 初始化中...</div>
-        <button id="tm-force-start" style="margin-top:5px; cursor:pointer; background:#007bff; color:white; border:none; padding:3px 8px; border-radius:3px;">▶ 强制开始播放</button>
+    panel.innerHTML = `
+        <div style="font-weight:bold; color:#00ff00; margin-bottom:10px;">🤖 V8.0 Worker 内核版</div>
+        <div id="tm-status" style="color:#aaa; margin-bottom:10px;">⏳ 等待手动激活...</div>
+        <button id="tm-start-btn" style="width:100%; padding:8px; background:#d9534f; color:white; border:none; border-radius:4px; cursor:pointer; font-weight:bold;">
+            🚀 点击启动挂机系统
+        </button>
     `;
-    document.body.appendChild(infoBox);
+    document.body.appendChild(panel);
 
-    document.getElementById('tm-force-start').onclick = function() {
-        const video = document.querySelector('video');
-        if(video) {
-            video.muted = true;
-            video.play();
-            updateStatus("已手动触发播放", "#00ff00");
-        }
-    };
+    const statusEl = document.getElementById('tm-status');
+    const btnEl = document.getElementById('tm-start-btn');
 
-    function updateStatus(msg, color = "#fff") {
-        const el = document.getElementById('tm-msg');
-        if(el) {
-            el.innerHTML = msg;
-            el.style.color = color;
+    function updateStatus(msg, color = '#fff') {
+        statusEl.innerHTML = msg;
+        statusEl.style.color = color;
+    }
+
+    // ==========================================
+    // MODULE 2: Web Worker (防冻结心脏)
+    // ==========================================
+    // 创建一个 Blob，里面包含 Worker 的代码。Worker 运行在独立线程。
+    const workerScript = `
+        self.onmessage = function(e) {
+            if (e.data === 'start') {
+                // 在 Worker 线程里跑定时器，浏览器无法对它进行后台节流
+                setInterval(() => {
+                    self.postMessage('tick');
+                }, ${CONFIG.scanInterval});
+            }
+        };
+    `;
+    const workerBlob = new Blob([workerScript], { type: 'application/javascript' });
+    const workerUrl = URL.createObjectURL(workerBlob);
+    const timerWorker = new Worker(workerUrl);
+
+    // ==========================================
+    // MODULE 3: 强力事件拦截 (隐身模式)
+    // ==========================================
+    function enableStealthMode() {
+        try {
+            // 1. 属性欺骗
+            Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+            Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+
+            // 2. 劫持 addEventListener (从根源阻止网页检测切屏)
+            const originalAddEventListener = EventTarget.prototype.addEventListener;
+            EventTarget.prototype.addEventListener = function(type, listener, options) {
+                // 如果网页想监听这些事件，直接忽略
+                if (['visibilitychange', 'webkitvisibilitychange', 'blur', 'pagehide'].includes(type)) {
+                    console.log(`🛡️ V8已拦截恶意监控事件: ${type}`);
+                    return;
+                }
+                return originalAddEventListener.apply(this, arguments);
+            };
+            console.log("✅ 隐身模式已激活");
+        } catch (e) {
+            console.error("隐身模式激活失败", e);
         }
     }
 
     // ==========================================
-    // MODULE: 全局 Alert 拦截
+    // MODULE 4: 音频保活 & 系统启动
     // ==========================================
-    function hookAlert(win) {
-        if (win && !win.hasHookedAlert) {
-            win.alert = console.log;
-            win.confirm = () => true;
-            win.hasHookedAlert = true;
+    let audioCtx;
+
+    btnEl.onclick = function() {
+        try {
+            // 1. 启动音频上下文 (骗取浏览器高优先级)
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new AudioContext();
+
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = 200; // 频率随便
+            gain.gain.value = 0.001;   // 极低音量
+
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+
+            // 2. 启动 Worker 计时器
+            timerWorker.postMessage('start');
+
+            // 3. 激活隐身拦截
+            enableStealthMode();
+
+            // 更新 UI
+            btnEl.innerText = "✅ 系统运行中 (可最小化)";
+            btnEl.style.background = "#5cb85c";
+            btnEl.disabled = true;
+            updateStatus("🔊 音频+Worker 双重保活", "#00ff00");
+
+            // 顺手触发一次播放
+            const video = document.querySelector('video');
+            if(video) { video.muted = true; video.play().catch(()=>{}); }
+
+        } catch (e) {
+            alert("启动失败: " + e.message);
         }
-    }
-    hookAlert(window);
+    };
 
     // ==========================================
-    // 主逻辑 (并行架构)
+    // 主逻辑 (由 Worker 的 'tick' 信号驱动)
     // ==========================================
     let stuckCounter = 0;
 
-    function gameLoop() {
-        try {
-            // 1. 无论如何，都尝试维护视频 (解决不播放问题)
-            handleVideo();
+    timerWorker.onmessage = function(e) {
+        if (e.data === 'tick') {
+            // 收到 Worker 的信号，执行一次检查
+            try {
+                // 1. 优先答题
+                const hasQuiz = processQuiz();
 
-            // 2. 检测并处理答题 (如果有)
-            handleQuiz();
-
-            // 3. 检测进度跳转
-            handleNextCourse();
-
-        } catch (e) {
-            console.error(e);
+                // 2. 如果没答题，维护视频
+                if (!hasQuiz) {
+                    processVideo();
+                    processNext();
+                }
+            } catch (err) {
+                console.error(err);
+            }
         }
-        
-        // 随机循环
-        setTimeout(gameLoop, Math.random() * 2000 + CONFIG.scanInterval);
-    }
-    
-    // 启动
-    setTimeout(gameLoop, 2000);
+    };
 
-
-    // ==========================================
-    // 功能函数
-    // ==========================================
-
-    // --- 1. 视频控制 (强制优先) ---
-    function handleVideo() {
+    // --- 功能 A: 视频维护 ---
+    function processVideo() {
         const video = document.querySelector('video');
-        if (!video) {
-            updateStatus("未检测到视频元素", "yellow");
-            return;
-        }
+        if (!video) return;
 
-        // 基础设置
         if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
         if (!video.muted) video.muted = true;
 
-        // 播放逻辑
         if (video.paused) {
+            // 尝试点击播放按钮
+            const playBtn = document.querySelector('.pausecenterchzqozkmgsbb, .pausechzqozkmgsbb');
+            if (playBtn && playBtn.offsetParent) playBtn.click();
+            else video.play().catch(()=>{});
+
             stuckCounter++;
             updateStatus(`⏸️ 视频暂停 (${stuckCounter})`, "orange");
-            
-            // 尝试多种方式启动
-            const playBtn = document.querySelector('.pausecenterchzqozkmgsbb, .pausechzqozkmgsbb');
-            
-            // 策略：如果没在答题，就疯狂尝试播放
-            const isAnswering = window.isAnsweringGlobal; // 全局锁
-            
-            if (!isAnswering) {
-                if(playBtn && playBtn.offsetParent) {
-                    playBtn.click();
-                } else {
-                    video.play().catch(e => {
-                        updateStatus("⚠️ 自动播放被阻拦<br>请点击下方按钮", "#ff0000");
-                    });
-                }
-            }
-            
-            // 防卡死刷新
-            if (stuckCounter * (CONFIG.scanInterval/1000) > CONFIG.reloadTimeout) {
+
+            if (stuckCounter * (CONFIG.scanInterval/1000) > CONFIG.reloadThreshold) {
                 location.reload();
             }
         } else {
@@ -150,39 +181,33 @@
         }
     }
 
-    // --- 2. 答题逻辑 (修正误判) ---
-    function handleQuiz() {
-        // 定义检测范围：主页 + 所有iframe
+    // --- 功能 B: 全域答题 ---
+    function processQuiz() {
+        // 搜索主页面和iframe
         const contexts = [{doc: document, win: window}];
         document.querySelectorAll('iframe').forEach(ifr => {
-            try { 
-                if(ifr.contentDocument) contexts.push({doc: ifr.contentDocument, win: ifr.contentWindow});
-            } catch(e){}
+            try { if(ifr.contentDocument) contexts.push({doc: ifr.contentDocument, win: ifr.contentWindow}); } catch(e){}
         });
 
-        let foundQuiz = false;
-
         for (const ctx of contexts) {
-            hookAlert(ctx.win);
-            
-            // 关键修正：检查容器是否可见
-            // 你的弹窗容器类名是 .mylayer-wrap
-            // 只有当 .mylayer-wrap 存在且 display != none 时才算有题
+            // 拦截 alert
+            if(!ctx.win.hooked) {
+                ctx.win.alert = console.log;
+                ctx.win.confirm = () => true;
+                ctx.win.hooked = true;
+            }
+
+            // 查找题目元素
             const layer = ctx.doc.querySelector('.mylayer-wrap, .layui-layer');
             const inputs = ctx.doc.querySelectorAll('input[name="response"]');
             const submitBtn = ctx.doc.querySelector('.u-main-btn, .btn-submit');
 
-            // 判定条件：有输入框 + 有提交按钮 + (弹窗层可见 或 找不到弹窗层但有输入框)
-            const isLayerVisible = layer ? (layer.style.display !== 'none' && layer.style.visibility !== 'hidden') : true;
+            // 判定题目是否出现 (可见性检查)
+            const isVisible = layer ? (layer.style.display !== 'none' && layer.style.visibility !== 'hidden') : true;
 
-            if (inputs.length > 0 && submitBtn && isLayerVisible) {
-                foundQuiz = true;
-                
-                // 标记全局状态，告诉视频模块"别急，先做题"
-                window.isAnsweringGlobal = true; 
-
-                if (!ctx.win.isHandlingQuiz) {
-                    ctx.win.isHandlingQuiz = true;
+            if (inputs.length > 0 && submitBtn && isVisible) {
+                if (!window.isGlobalAnswering) {
+                    window.isGlobalAnswering = true;
                     updateStatus("📝 正在答题...", "#00ffff");
 
                     setTimeout(() => {
@@ -191,35 +216,32 @@
                         let nextIndex = (checkedIndex + 1) % inputs.length;
 
                         const target = inputs[nextIndex];
-                        // 点击 Label
+                        // 尝试点击 label
                         let clickTarget = target;
                         if (target.closest('.m-radio-tick')) clickTarget = target.closest('.m-radio-tick');
                         else if (target.parentElement.tagName === 'STRONG') clickTarget = target.parentElement.parentElement;
-                        
+
                         clickTarget.click();
                         target.click();
 
                         setTimeout(() => {
                             submitBtn.click();
-                            ctx.win.isHandlingQuiz = false;
-                            window.isAnsweringGlobal = false;
+                            window.isGlobalAnswering = false;
                         }, 800);
                     }, CONFIG.answerDelay);
                 }
-                break; // 找到一个就处理，退出循环
+                return true; // 告诉主逻辑正在答题，暂停视频处理
             }
         }
-        
-        if(!foundQuiz) {
-            window.isAnsweringGlobal = false;
-        }
+        window.isGlobalAnswering = false;
+        return false;
     }
 
-    // --- 3. 跳转逻辑 ---
-    function handleNextCourse() {
+    // --- 功能 C: 跳转 ---
+    function processNext() {
         const currentSpan = document.getElementById('viewTimeTxt');
         if (!currentSpan) return;
-        
+
         const parentP = currentSpan.parentElement;
         if (!parentP) return;
         const allSpans = parentP.querySelectorAll('span');
@@ -233,7 +255,7 @@
         const isVideoDone = (video && video.ended);
 
         if (isTimeDone || isVideoDone) {
-            updateStatus("✅ 本节完成，跳转中...", "#00ff00");
+            updateStatus("✅ 跳转下一节...", "#00ff00");
             const nextBtn = document.querySelector('.btn.next');
             if (nextBtn && !nextBtn.classList.contains('disabled')) {
                 nextBtn.click();
